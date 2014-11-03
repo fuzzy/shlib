@@ -18,6 +18,7 @@ __shlib_misc_map(){
         for i in "$@"; do
                 eval "${command} \"${i}\""
         done
+	unset command
 }
 alias misc.map='__shlib_misc_map'
 
