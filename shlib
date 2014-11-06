@@ -42,7 +42,6 @@ readonly POSIXLY_CORRECT=posix
 # routines as part of the core shlib.  Everything else MUST be supplied via
 # 'import' libraries.
 if ! hascmd let; then let() { for __let_expression; do command eval test '$((${__let_expression}))' -ne 0;done; } fi
-float() { awk "BEGIN{ exit !($*); }"; }
 dirname()
 {
 	case "${1}" in (.*);; (/*);; (*) set -- "./${1}";; esac
@@ -57,7 +56,12 @@ basename()
 	test -z "${1}" && set -- '/'
 	echo "${1}"
 }
-pathname()
+
+##
+# shlib library routines
+
+# FIXME this is not remotely portable, and it beaks our coding style guidelines
+__shlib_realpath()
 {(
 	if ! test -d "${1}"; then
 		set -- "`dirname "${1}"`" "`basename "${1}"`"
@@ -69,29 +73,46 @@ pathname()
 		echo "`pwd`/${2}"
 	fi
 )}
-getarg()
+alias shlib.realpath='__shlib_realpath '
+
+__shlib_optarg()
 {
 	if test "${1#*=}" != "${1}"; then
 		set -- "${1}" "${2}" "${1#*=}"
 	else
 		case "${2}" in (-*);; (*) set -- "${1}" "${2}" "${2}";; esac
 	fi
+	test -z "${3}" || echo "${3}"
+}
+alias shlib.optarg='__shlib_optarg '
+
+__shlib_getarg()
+{
+	set -- "${1}" "${2}" "$(__shlib_optarg "${@}")"
 	if test -z "${3}"; then
 		__shlib_usage 'shlib' "option '${1%=*}' requires an argument"
 	fi
 	echo "${3}"
 }
+alias shlib.getarg='__shlib_getarg '
 
-##
-# useful utility routines
-error() { echo "error: $*" >&2; }
-die() { error "$*"; exit 1; }
 
-##
-# shlib library routines
+__shlib_error() { echo "error: $*" >&2; }
+alias shlib.error='__shlib_error '
+alias error='__shlib_error '
+
+__shlib_die() { error "$*"; exit 1; }
+alias shlib.die='__shlib_die '
+alias die='__shlib_die '
+
+
 __shlib_lib_resolv()
 {
-	__shlib_lib_resolv_lib="${1}"
+	if test "${1%.*}" != "${1}"; then
+		__shlib_lib_resolv_lib="${1%.*}/${1##*.}"
+	else
+		__shlib_lib_resolv_lib="${1}"
+	fi
 	__shlib_lib_resolv_ifs="${IFS}"
 	IFS=':'
 	set -- ${SHLIB_PATH}
@@ -108,7 +129,7 @@ __shlib_lib_resolv()
 			__shlib_lib_resolv_file="${__shlib_lib_resolv_path}/${__shlib_lib_resolv_lib}/__init__.shlib"
 		fi
 		if ! test -z "${__shlib_lib_resolv_file}"; then
-			pathname "${__shlib_lib_resolv_file}"
+			__shlib_realpath "${__shlib_lib_resolv_file}"
 			break
 		fi
 	done
@@ -116,39 +137,86 @@ __shlib_lib_resolv()
 	unset __shlib_lib_resolv_lib
 	unset __shlib_lib_resolv_file
 }
-__shlib_lib_valid() { ! test -z "$(__shlib_lib_resolv "${1}")" || return 1; return 0; }
-alias shlib.resolv='__shlib_lib_resolv '
-alias shlib.resolve='__shlib_lib_resolv '
-alias shlib.valid='__shlib_lib_valid '
+
+__shlib_valid() { ! test -z "$(__shlib_lib_resolv "${1}")" || return 1; return 0; }
+
+__shlib_doc_resolv()
+{
+	if test "${1%.*}" != "${1}"; then
+		__shlib_doc_resolv_lib="${1%.*}/${1##*.}"
+	else
+		__shlib_doc_resolv_lib="${1}"
+	fi
+	__shlib_doc_resolv_ifs="${IFS}"
+	IFS=':'
+	set -- ${SHLIB_PATH}
+	IFS="${__shlib_doc_resolv_ifs}"
+	unset __shlib_doc_resolv_ifs
+
+	__shlib_doc_resolv_file=
+	for __shlib_doc_resolv_path; do
+		if test -f "${__shlib_doc_resolv_path}/${__shlib_doc_resolv_lib}.md"; then
+			__shlib_doc_resolv_file="${__shlib_doc_resolv_path}/${__shlib_doc_resolv_lib}.md"
+		fi
+
+		if test -e "${__shlib_doc_resolv_path}/${__shlib_doc_resolv_lib}/__index__.md"; then
+			__shlib_doc_resolv_file="${__shlib_doc_resolv_path}/${__shlib_doc_resolv_lib}/__index__.md"
+		fi
+		if ! test -z "${__shlib_doc_resolv_file}"; then
+			__shlib_realpath "${__shlib_doc_resolv_file}"
+			break
+		fi
+	done
+	unset __shlib_doc_resolv_path
+	unset __shlib_doc_resolv_lib
+	unset __shlib_doc_resolv_file
+}
+__shlib_doc()
+{
+	set -- "${1}" "${1%.*}" "${1##*.}" "$(__shlib_doc_resolv "${1}")"
+	if test "${2}" != "${3}"; then
+		test -e "${4}" || die "no documentation for '${1}'"
+	fi
+
+	if test -e "${4}"; then
+		sed \
+			-e '/^[[[]/d;/```sh/d;/```/d;s/`//g' \
+			-e 's/[[]\([^]]\{1,\}\)[]][(][^)]*[)]/\1/g' \
+			-e 's/[[]\([^]]\{1,\}\)[]][[][^]]*[]]/\1/g' \
+			"${4%}"
+	fi
+
+	exit 0
+}
 
 __shlib_imported()
 {
-	: "__shlib_imported($#): $*" >&2
-	__shlib_imported_lib="$(printf '%s' "$1"|tr '/' '_')"
+	: "__shlib_imported($#): $*"
+	__shlib_imported_lib="$(printf '%s' "$1"|tr '[/.]' '_')"
 	shift
 	set -- "${__shlib_imported_lib}" "$@"
 	unset __shlib_imported_lib
-	: "__shlib_imported($#): $*" >&2
+	: "__shlib_imported($#): $*"
 
 	case "$#" in
-	(1)	"__shlib_imported_$1" > /dev/null 2>&1 || return 1;;
-	(2)	eval "__shlib_imported_$1() { :; }";;
+	(1)	"__shlib_${1}_imported" > /dev/null 2>&1 || return 1;;
+	(2)	eval "__shlib_${1}_imported() { :; }";;
 	(*)	return 1;;
 	esac
 
 	# We only get this far if $# == 2
-	eval "__shlib_imports() { echo '$(__shlib_imports) $1'; }"
+	eval "__shlib_imports() { echo '$(__shlib_imports) ${1}'; }"
 	return 0
 }
 
 __shlib_import_lib()
 {
-	if ! shlib.valid "${1}"; then
+	if ! __shlib_valid "${1}"; then
 		die "invalid library '${1}'"
 	fi
 
 	# name file
-	set -- "${1}" "$(shlib.resolv "${1}")"
+	set -- "${1}" "$(__shlib_lib_resolv "${1}")"
 
 	# Only allow a library to be imported once per-scope
 	! __shlib_imported "${1}" || return 0
@@ -167,18 +235,26 @@ __shlib_import_lib()
 	cd "${3}"
 }
 
-# FIXME support 'import <routine> from <lib>'
-import()
+# FIXME support 'import <routine> from <lib>'?
+__shlib_import()
 {
-	for __shlib_import_arg; do __shlib_import_lib "${__shlib_import_arg}"; done
+	for __shlib_import_arg; do
+		if ! eval "${__shlib_import_arg}_imported" 2>/dev/null; then
+			__shlib_import_lib "${__shlib_import_arg}"
+		fi
+	done
 	unset __shlib_import_arg
 
 }
-alias shlib.import='import '
+alias shlib.import='__shlib_import '
+alias import='__shlib_import '
 
 ##
 # These routines are pretty shlib specific.
 alias shlib.main="! test \"\${SHLIB_CALL_STACK}\" = '__main__' || "
+alias shlib.hascmd='hascmd '
+alias shlib.pathcmd='pathcmd '
+
 __shlib_version() { echo 0.01; }
 __shlib_usage()
 {
@@ -203,6 +279,7 @@ __shlib_usage()
 	   --shlib-only			Only use shlib versions of commands
 
 EOF
+	exit 0
 }
 
 # If we were not "installed" then this variable will not have been
@@ -216,8 +293,8 @@ EOF
 if test -z "${SHLIB_PATH}"; then
 	SHLIB_PATH="@shlib_libexecdir@"
 	if ! test -d "${SHLIB_PATH}" && test -d "${0%/*}/libexec"; then
-			SHLIB_PATH="`pathname "${0%/*}/libexec"`"
-			readonly SHLIB_PATH="${SHLIB_PATH%/}"
+		SHLIB_PATH="$(__shlib_realpath "${0%/*}/libexec")"
+		readonly SHLIB_PATH="${SHLIB_PATH%/}"
 	fi
 
 	# Note: Checking for library validity is done at import(), this allows
@@ -228,24 +305,19 @@ fi
 # being 'sourced' by some other script which wants to utilize shlib as a
 # library.
 if test "`basename "${0}"`" = 'shlib'; then
-	# Look for cries for help before parsing arguments
-	for shlib_arg; do
-		case "${shlib_arg}" in
-		(-h|-help|--help)
-			__shlib_usage; exit 0;;
-		(--) break;;
-		esac
-	done
-	unset shlib_arg
-
 	SHLIB_IMPORTS=
+	SHLIB_COMMAND=
 	while test "$#" -gt '0'; do
 		case "${1}" in
+		(-h|-help|--help)
+			shlib_arg="$(__shlib_optarg "${1}" "${2}")"
+			test -z "${shlib_arg}" || __shlib_doc "${shlib_arg}"
+			__shlib_usage;;
 		(-V|-version|--version)
 			echo "shlib version `shlib_version`"; exit 0;;
 
 		(-L|-libdir|--libdir|--libdir=*)
-			shlib_arg="$(getarg "${1}" "${2}")"
+			shlib_arg="$(__shlib_getarg "${1}" "${2}")"
 			test -e "${shlib_arg}" || die "no such directory '${shlib_arg}'"
 			test -d "${shlib_arg}" || die "not a directory '${shlib_arg}'"
 			SHLIB_PATH="${shlib_arg}:${SHLIB_PATH}"
@@ -253,7 +325,7 @@ if test "`basename "${0}"`" = 'shlib'; then
 			case "${1}" in (*=*);;(*) shift;;esac;;
 
 		(-I|--import|--import=*)
-			SHLIB_IMPORTS="${SHLIB_IMPORTS} $(getarg "${1}" "${2}")"
+			SHLIB_IMPORTS="${SHLIB_IMPORTS} $(__shlib_getarg "${1}" "${2}")"
 			case "${1}" in (*=*);;(*) shift;;esac;;
 
 		(--shlib-only)
@@ -264,6 +336,8 @@ if test "`basename "${0}"`" = 'shlib'; then
 		(-x)	set -x;;
 		(-c)	test "$#" -gt '1' || \
 				__shlib_usage 'shlib' "option '${1}' requires an argument"
+			test -z "${SHLIB_COMMAND}" ||
+				__shlib_usage 'shlib' "option '${1}' already specified"
 			SHLIB_COMMAND="${2}"
 			shift;;
 
@@ -280,15 +354,17 @@ if test "`basename "${0}"`" = 'shlib'; then
 	for shlib_lib_to_import in ${SHLIB_IMPORTS}; do
 		import "${shlib_lib_to_import}"
 	done
+	unset -f __shlib_doc_resolv
+	unset -f __shlib_doc
 	unset -f __shlib_version
 	unset -f __shlib_usage
 
-	# Handle being called as 'shlib -c "<cmd>"'
+	# FIXME write SHLIB_COMMAND to a temp SHLIB_SCRIPT to avoid the use of 'eval'
 	if ! test -z "${SHLIB_COMMAND}"; then
 		SHLIB_CALL_STACK='__main__' eval "${SHLIB_COMMAND}"
 	else # We are being "executed", so lets check our argument list.
 		test "$#" -ne '0' || die 'no script specified'
-		test -f "`pathname "${1}"`" || die "file does not exist '${1}'"
+		test -f "$(__shlib_realpath "${1}")" || die "file does not exist '${1}'"
 
 		PROGNAME="`basename "${1}"`"
 		SHLIB_SCRIPT="${1}"
