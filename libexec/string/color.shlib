@@ -1,0 +1,28 @@
+#!/usr/bin/env shlib
+
+__shlib_string_color() {
+        test -z "${1}" && (echo "Usage: color (0|1) NN <text>" && return 1)
+	bold=$1;shift
+	fgcol=$1;shift
+	printf "[${bold};${fgcol}m${*}[0m"
+}
+
+alias string.color='__shlib_string_color'
+alias string.black='__shlib_string_color 0 30'
+alias string.red='__shlib_string_color 0 31'
+alias string.green='__shlib_string_color 0 32'
+alias string.brown='__shlib_string_color 0 33'
+alias string.blue='__shlib_string_color 0 34'
+alias string.purple='__shlib_string_color 0 35'
+alias string.cyan='__shlib_string_color 0 36'
+alias string.white='__shlib_string_color 0 37'
+alias string.bold.black='__shlib_string_color 1 30'
+alias string.bold.red='__shlib_string_color 1 31'
+alias string.bold.green='__shlib_string_color 1 32'
+alias string.bold.brown='__shlib_string_color 1 33'
+alias string.bold.blue='__shlib_string_color 1 34'
+alias string.bold.purple='__shlib_string_color 1 35'
+alias string.bold.cyan='__shlib_string_color 1 36'
+alias string.bold.white='__shlib_string_color 1 37'
+
+# vim: filetype=sh
